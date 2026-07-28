@@ -36,6 +36,7 @@
 import base64
 import copy
 import math
+import threading
 from pathlib import Path
 
 import altair as alt
@@ -88,6 +89,13 @@ def build_model(data):
     return m
 
 
+# One solve at a time per machine: every Streamlit session runs app.py in
+# its own thread of this one process, and the solver-log capture redirects
+# process-global stdout. Overlapping captures corrupt each other and fail
+# both solves, so every solve serializes behind this lock.
+_SOLVE_LOCK = threading.Lock()
+
+
 def _solve_capturing(m):
     """Run the solver and return (results, log_text). Captures HiGHS's
     stdout via Pyomo's capture_output (FD-level redirect on newer Pyomo,
@@ -95,13 +103,13 @@ def _solve_capturing(m):
     a logfile= kwarg, so the FD-level capture is the only path."""
     log_text = ""
     try:
-        with capture_output(capture_fd=True) as buf:
+        with _SOLVE_LOCK, capture_output(capture_fd=True) as buf:
             solver = pyo.SolverFactory("appsi_highs")
             results = solver.solve(m, tee=True)
         log_text = buf.getvalue()
     except TypeError:
         # Older Pyomo without capture_fd: fall back to plain stdout capture.
-        with capture_output() as buf:
+        with _SOLVE_LOCK, capture_output() as buf:
             solver = pyo.SolverFactory("appsi_highs")
             results = solver.solve(m, tee=True)
         log_text = buf.getvalue()
