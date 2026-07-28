@@ -92,8 +92,13 @@ def build_model(data):
 # One solve at a time per machine: every Streamlit session runs app.py in
 # its own thread of this one process, and the solver-log capture redirects
 # process-global stdout. Overlapping captures corrupt each other and fail
-# both solves, so every solve serializes behind this lock.
-_SOLVE_LOCK = threading.Lock()
+# both solves, so every solve serializes behind one process-wide lock.
+# The lock must come from st.cache_resource: Streamlit re-executes this
+# script per rerun in a fresh namespace, so a bare module-level Lock
+# would be a new object every rerun and would serialize nothing.
+@st.cache_resource(show_spinner=False)
+def _solve_lock():
+    return threading.Lock()
 
 
 def _solve_capturing(m):
@@ -103,13 +108,13 @@ def _solve_capturing(m):
     a logfile= kwarg, so the FD-level capture is the only path."""
     log_text = ""
     try:
-        with _SOLVE_LOCK, capture_output(capture_fd=True) as buf:
+        with _solve_lock(), capture_output(capture_fd=True) as buf:
             solver = pyo.SolverFactory("appsi_highs")
             results = solver.solve(m, tee=True)
         log_text = buf.getvalue()
     except TypeError:
         # Older Pyomo without capture_fd: fall back to plain stdout capture.
-        with _SOLVE_LOCK, capture_output() as buf:
+        with _solve_lock(), capture_output() as buf:
             solver = pyo.SolverFactory("appsi_highs")
             results = solver.solve(m, tee=True)
         log_text = buf.getvalue()
